@@ -1,4 +1,4 @@
-name: android-aarch64-wheel
+name: android-aarch64-all-wheels
 on:
   workflow_dispatch:
 
@@ -6,29 +6,64 @@ jobs:
   build:
     runs-on: ubuntu-latest
     container: ghcr.io/cross-rs/aarch64-linux-android:main
+
+    env:
+      TS_TAG: v0.20.8          # ‘parser.h’가 포함된 마지막 트리시터 릴리스
+
     steps:
-      - uses: actions/checkout@v4
+    #--------------------------- 소스 가져오기 ---------------------------#
+    - uses: actions/checkout@v4
 
-      - name: Install Python & maturin
-        run: |
-          apt-get update -qq
-          apt-get install -y --no-install-recommends python3 python3-pip python3-venv curl
-          python3 -m venv venv
-          . venv/bin/activate
-          pip install --upgrade pip maturin
-          curl https://sh.rustup.rs -sSf | sh -s -- -y
-          . $HOME/.cargo/env
-          rustup target add aarch64-linux-android
+    #------------------ Rust, Python, maturin 한꺼번에 세팅 ------------------#
+    - name: Set up Rust + Python + maturin
+      run: |
+        # Python & pip
+        apt-get update -qq
+        apt-get install -y --no-install-recommends \
+          python3 python3-pip python3-venv curl ca-certificates git
 
-      - name: Build uv wheel (Android aarch64)
-        run: |
-          . venv/bin/activate
-          maturin build --release \
-            --target aarch64-linux-android \
-            --compatibility off \
-            -o dist
+        python3 -m venv venv
+        . venv/bin/activate
+        pip install -U pip maturin
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: uv-android-wheel
-          path: dist/*.whl
+        # Rust & Android 표준 라이브러리
+        curl https://sh.rustup.rs -sSf | sh -s -- -y
+        . $HOME/.cargo/env
+        rustup target add aarch64-linux-android
+
+        # ★ 이 한 줄로 이후 모든 step에서도 cargo/rustup 인식
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+    #--------------------- 트리시터 헤더 폴더 내려받기 ---------------------#
+    - name: Fetch tree-sitter headers
+      run: |
+        git clone --depth 1 -b $TS_TAG https://github.com/tree-sitter/tree-sitter.git ts-src
+        echo "CFLAGS=-Its-src/lib/include" >> "$GITHUB_ENV"
+
+    #----------------------------- uv 휠 빌드 -----------------------------#
+    - name: Build uv (Android aarch64)
+      run: |
+        . venv/bin/activate
+        maturin build --release \
+          --target aarch64-linux-android \
+          --compatibility off \
+          -o dist
+
+    #----------------------- tree-sitter-* 휠 빌드 -----------------------#
+    - name: Build tree-sitter wheels
+      run: |
+        . venv/bin/activate
+        pip wheel --no-binary=:all: \
+          tree-sitter-yaml==0.7.0 \
+          tree-sitter-c-sharp==0.23.1 \
+          tree-sitter-python==0.23.0 \
+          tree-sitter-embedded-template==0.23.2 \
+          tree-sitter-language-pack==0.7.3 \
+          
+          -w dist
+
+    #------------------------- 결과 아카이브 업로드 -------------------------#
+    - uses: actions/upload-artifact@v4
+      with:
+        name: android-aarch64-wheels
+        path: dist/*.whl
